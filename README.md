@@ -16,5 +16,5 @@ val futureSize = clusterActor ? DockerHost.ListContainers("test_label")
 
 val futureSize = clusterActor ? Cluster.ListHosts()
 
-val futureSize = clusterActor ? Cluster.AddDockerHost("api version","api url")
+val futureSize = clusterActor ? Cluster.AddDockerHost("1.31","http://localhost:2375")
 

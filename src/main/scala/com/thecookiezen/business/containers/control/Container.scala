@@ -1,7 +1,7 @@
-package com.thecookiezen.containers
+package com.thecookiezen.business.containers.control
 
 import akka.actor.FSM
-import com.thecookiezen.containers.Container.{ContainerState, Created, Data, Uninitialized}
+import com.thecookiezen.business.containers.control.Container.{ContainerState, Created, Data, Uninitialized}
 
 class Container(name: String) extends FSM[ContainerState, Data] {
   startWith(Created, Uninitialized)

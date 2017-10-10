@@ -1,24 +1,31 @@
-package com.thecookiezen.containers
+package com.thecookiezen.business.containers.control
 
 import java.time.LocalDateTime
 import java.util.UUID
 
 import akka.actor.{FSM, Props, Terminated}
+import akka.http.scaladsl.Http
+import akka.http.scaladsl.model.{HttpRequest}
 import akka.pattern.ask
 import akka.routing.{ActorRefRoutee, RoundRobinRoutingLogic, Router}
+import akka.stream.ActorMaterializer
 import akka.util
 import akka.util.Timeout
-import com.thecookiezen.containers.Cluster._
-import com.thecookiezen.containers.Deployment.DeployJob
-import com.thecookiezen.containers.DockerHost.ListContainers
+import com.thecookiezen.business.containers.control.Cluster._
+import com.thecookiezen.business.containers.control.Deployment.DeployJob
+import com.thecookiezen.business.containers.control.Host.ListContainers
+import com.thecookiezen.integration.docker.DockerHost
 
 import scala.concurrent.Future
 import scala.concurrent.duration._
 
-class Cluster(name: String, maxContainers: Int = 50) extends FSM[ClusterState, Data] {
+class Cluster(name: String, maxContainers: Int = 50)(implicit materializer: ActorMaterializer) extends FSM[ClusterState, Data] {
 
   implicit val timeout: util.Timeout = Timeout(5 seconds)
+
   import scala.concurrent.ExecutionContext.Implicits.global
+
+  val http = Http(context.system)
 
   val router = Router(RoundRobinRoutingLogic())
 
@@ -73,7 +80,7 @@ class Cluster(name: String, maxContainers: Int = 50) extends FSM[ClusterState, D
   private def createNewHostAndRegisterAsRoute(newHost: Option[HostIdentity]) = {
     newHost match {
       case Some(host) =>
-        val child = context.actorOf(Props(classOf[DockerHost], host.dockerApiVersion, host.dockerDaemonUrl), host.id)
+        val child = context.actorOf(Props(classOf[DockerHost], host.dockerApiVersion, host.dockerDaemonUrl, (req: HttpRequest) => http.singleRequest(req)), host.id)
         context.watch(child)
         router.addRoutee(ActorRefRoutee(child))
     }

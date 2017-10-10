@@ -1,33 +1,30 @@
-package com.thecookiezen.containers
+package com.thecookiezen.business.containers.control
 
+import akka.actor.FSM.Failure
 import akka.actor.{ActorRef, FSM, Stash}
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings}
-import akka.util.ByteString
-import com.thecookiezen.containers.DockerHost.{Uninitialized, _}
+import com.thecookiezen.business.containers.boundary.ClusterEngine
+import com.thecookiezen.business.containers.control.Host.{Uninitialized, _}
 
-class DockerHost(dockerApiVersion: String, dockerDaemonUrl: String) extends FSM[DockerDaemonState, Data] with Stash {
+import scala.concurrent.duration._
+
+trait Host extends FSM[HostState, Data] with Stash {
+
+  this: ClusterEngine =>
 
   import akka.pattern.pipe
   import context.dispatcher
 
   final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
 
-  val http = Http(context.system)
-
   startWith(Initialization, Uninitialized)
 
-  when(Initialization) {
-    case Event(HttpResponse(StatusCodes.OK, _, entity, _), Uninitialized) =>
-      entity.dataBytes.runFold(ByteString(""))(_ ++ _).foreach { body =>
-        log.info("Got response, body: " + body.utf8String)
-      }
-      goto(Active) using ContainersList(Seq.empty)
-    case Event(resp @ HttpResponse(code, _, _, _), Uninitialized) =>
-        log.info("Request failed, response code: " + code)
-      resp.discardEntityBytes()
-      goto(Active) using ContainersList(Seq.empty)
+  when(Initialization, stateTimeout = 10 seconds) {
+    case Event(Initialized(containers), Uninitialized) =>
+      goto(Active) using ContainersList(containers)
+    case Event(StateTimeout, Uninitialized) =>
+      log.info("DockerHost {}: failed initialization stage", self.path.name)
+      stop(reason = Failure(new IllegalStateException("Containers loading failed")))
     case Event(_, _) => {
       stash()
       stay
@@ -49,18 +46,18 @@ class DockerHost(dockerApiVersion: String, dockerDaemonUrl: String) extends FSM[
   onTransition {
     case _ -> Initialization => {
       log.info("Initialization of new docker host")
-      http.singleRequest(HttpRequest(uri = dockerDaemonUrl)).pipeTo(self)
+      getRunningContainers("test").pipeTo(self)
     }
   }
 
   initialize()
 }
 
-object DockerHost {
+object Host {
 
-  sealed trait DockerDaemonState
-  case object Initialization extends DockerDaemonState
-  case object Active extends DockerDaemonState
+  sealed trait HostState
+  case object Initialization extends HostState
+  case object Active extends HostState
 
   sealed trait Data
   case object Uninitialized extends Data
