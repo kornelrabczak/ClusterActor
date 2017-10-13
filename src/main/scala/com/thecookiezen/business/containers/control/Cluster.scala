@@ -5,7 +5,7 @@ import java.util.UUID
 
 import akka.actor.{FSM, Props, Terminated}
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{HttpRequest}
+import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
 import akka.pattern.ask
 import akka.routing.{ActorRefRoutee, RoundRobinRoutingLogic, Router}
 import akka.stream.ActorMaterializer
@@ -19,11 +19,13 @@ import com.thecookiezen.integration.docker.DockerHost
 import scala.concurrent.Future
 import scala.concurrent.duration._
 
-class Cluster(name: String, maxContainers: Int = 50)(implicit materializer: ActorMaterializer) extends FSM[ClusterState, Data] {
+class Cluster(name: String, maxContainers: Int = 50) extends FSM[ClusterState, Data] {
+
+  import context.dispatcher
 
   implicit val timeout: util.Timeout = Timeout(5 seconds)
 
-  import scala.concurrent.ExecutionContext.Implicits.global
+  implicit val materializer = ActorMaterializer()
 
   val http = Http(context.system)
 
@@ -36,9 +38,9 @@ class Cluster(name: String, maxContainers: Int = 50)(implicit materializer: Acto
   }
 
   when(Empty) {
-    case Event(dockerHost: AddDockerHost, HostsList(_)) => {
+    case Event(host: AddNewHost, HostsList(_)) => {
       goto(NewHostInitialization) using HostsList(hosts = Seq(
-        HostIdentity(dockerApiVersion = dockerHost.dockerApiVersion, dockerDaemonUrl = dockerHost.dockerDaemonUrl)))
+        HostIdentity(apiVersion = host.apiVersion, daemonUrl = host.daemonUrl)))
     }
   }
 
@@ -47,9 +49,9 @@ class Cluster(name: String, maxContainers: Int = 50)(implicit materializer: Acto
   }
 
   when(Active) {
-    case Event(dockerHost: AddDockerHost, h @ HostsList(hosts)) => {
+    case Event(host: AddNewHost, h @ HostsList(hosts)) => {
       goto(NewHostInitialization) using h.copy(hosts = hosts :+ HostIdentity(
-        dockerApiVersion = dockerHost.dockerApiVersion, dockerDaemonUrl = dockerHost.dockerDaemonUrl))
+        apiVersion = host.apiVersion, daemonUrl = host.daemonUrl))
     }
     case Event(deployment @ DeployJob, HostsList(hosts)) if hosts.nonEmpty => {
       router.route(deployment, self)
@@ -80,15 +82,19 @@ class Cluster(name: String, maxContainers: Int = 50)(implicit materializer: Acto
   private def createNewHostAndRegisterAsRoute(newHost: Option[HostIdentity]) = {
     newHost match {
       case Some(host) =>
-        val child = context.actorOf(Props(classOf[DockerHost], host.dockerApiVersion, host.dockerDaemonUrl, (req: HttpRequest) => http.singleRequest(req)), host.id)
+        val child = context.actorOf(getProperties(host, (req: HttpRequest) => http.singleRequest(req)), host.id)
         context.watch(child)
         router.addRoutee(ActorRefRoutee(child))
     }
   }
 
+  private def getProperties(host: HostIdentity, http: HttpRequest => Future[HttpResponse]): Props = {
+    Props(classOf[DockerHost], host.apiVersion, host.daemonUrl, http, dispatcher, materializer)
+  }
+
   whenUnhandled {
     case Event(Terminated(child), h @ HostsList(hosts)) => {
-      log.info("Cluster {}: child {} was terminated", name, child)
+      log.info("Cluster {}: child {} was terminated", name, child.path.name)
       router.removeRoutee(child)
       stay using HostsList(hosts.filterNot(host => host.id == child.path.name))
     }
@@ -119,8 +125,8 @@ object Cluster {
   final case class SizeOfCluster()
   final case class ListHosts()
   final case class GetHost(id: String)
-  final case class AddDockerHost(dockerApiVersion: String, dockerDaemonUrl: String, created: LocalDateTime = LocalDateTime.now())
-  final case class HostIdentity(id: String = UUID.randomUUID().toString, dockerApiVersion: String, dockerDaemonUrl: String)
+  final case class AddNewHost(apiVersion: String, daemonUrl: String, created: LocalDateTime = LocalDateTime.now())
+  final case class HostIdentity(id: String = UUID.randomUUID().toString, apiVersion: String, daemonUrl: String)
   final case class NewHostInitialized()
 }
 

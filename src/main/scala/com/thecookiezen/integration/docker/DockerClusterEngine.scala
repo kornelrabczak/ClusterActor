@@ -8,30 +8,29 @@ import akka.http.scaladsl.unmarshalling.Unmarshal
 import akka.stream.Materializer
 import com.thecookiezen.business.containers.boundary.ClusterEngine
 import com.thecookiezen.business.containers.control.Host.Initialized
-import com.thecookiezen.integration.docker.DockerClusterEngine.{ContainersListResponse, DockerContainer}
+import com.thecookiezen.integration.docker.DockerClusterEngine.{ContainersListResponse, DockerContainer, getLabelJson}
 import org.slf4j.LoggerFactory
 import spray.json.DefaultJsonProtocol
 
 import scala.concurrent.{ExecutionContext, Future}
 
+trait ContainersListProtocol extends SprayJsonSupport with DefaultJsonProtocol {
+  implicit val dockerContainerFormat = jsonFormat3(DockerContainer)
+  implicit val containersListResponseFormat = jsonFormat1(ContainersListResponse)
+}
+
 class DockerClusterEngine(dockerApiVersion: String,
                           dockerDaemonUrl: String,
                           http: HttpRequest => Future[HttpResponse])
                          (implicit ec: ExecutionContext, mat: Materializer)
-  extends ClusterEngine
-    with SprayJsonSupport {
-
-  import DefaultJsonProtocol._
-
-  implicit val dockerContainerFormat = jsonFormat3(DockerContainer)
-  implicit val containersListResponseFormat = jsonFormat1(ContainersListResponse)
+  extends ClusterEngine with ContainersListProtocol {
 
   val baseUrl = s"$dockerDaemonUrl/v$dockerApiVersion"
 
   private val log = LoggerFactory.getLogger(classOf[DockerClusterEngine])
 
   override def getRunningContainers(label: String): Future[Initialized] = {
-    http(Get(Uri(s"""$baseUrl/containers/json?filters={"label":["cluster=$label"]}"""))).flatMap(response =>
+    http(Get(Uri(s"""$baseUrl/containers/json?filters=${getLabelJson(label)}"""))).flatMap(response =>
       response.status match {
         case Success(_) => Unmarshal(response.entity).to[ContainersListResponse]
           .map(response => Initialized(response.containers.map(container => container.id)))
@@ -45,6 +44,11 @@ class DockerClusterEngine(dockerApiVersion: String,
 }
 
 object DockerClusterEngine {
-  final case class ContainersListResponse(containers: List[DockerContainer])
-  final case class DockerContainer(id: String, names: List[String], image: String)
+  def getLabelJson(label: String): String = {
+    s"""{"label":["cluster=$label"]}"""
+  }
+
+  case class ContainersListResponse(containers: Seq[DockerContainer])
+  case class DockerContainer(id: String, names: Seq[String], image: String)
 }
+
