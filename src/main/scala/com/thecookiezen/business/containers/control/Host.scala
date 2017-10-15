@@ -20,7 +20,8 @@ trait Host extends FSM[HostState, Data] with Stash {
   startWith(Initialization, Uninitialized)
 
   when(Initialization, stateTimeout = 10 seconds) {
-    case Event(Initialized(containers), Uninitialized) =>
+    case Event(Initialized(containers), _) =>
+      log.info("Host initialized: found {} containers", containers)
       goto(Active) using ContainersList(containers)
     case Event(StateTimeout, Uninitialized) =>
       log.info("DockerHost {}: failed initialization stage", self.path.name)
