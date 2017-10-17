@@ -1,11 +1,16 @@
 package com.thecookiezen.integration.docker
 
+import akka.NotUsed
+import akka.actor.ActorSystem
 import akka.http.scaladsl.client.RequestBuilding._
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
 import akka.http.scaladsl.model.StatusCodes.Success
+import akka.http.scaladsl.model.Uri.Query
 import akka.http.scaladsl.model.{HttpRequest, HttpResponse, Uri}
 import akka.http.scaladsl.unmarshalling.Unmarshal
 import akka.stream.Materializer
+import akka.stream.scaladsl.{Framing, Source}
+import akka.util.ByteString
 import com.thecookiezen.business.containers.boundary.ClusterEngine
 import com.thecookiezen.business.containers.control.Host.Initialized
 import com.thecookiezen.integration.docker.DockerClusterEngine.{DockerContainer, getLabelJson}
@@ -24,7 +29,7 @@ class DockerClusterEngine(dockerApiVersion: String,
                          (implicit ec: ExecutionContext, mat: Materializer)
   extends ClusterEngine with ContainersListProtocol {
 
-  val baseUrl = s"$dockerDaemonUrl/v$dockerApiVersion"
+  val baseUrl = s"http://$dockerDaemonUrl/v$dockerApiVersion"
 
   private val log = LoggerFactory.getLogger(classOf[DockerClusterEngine])
 
@@ -41,6 +46,15 @@ class DockerClusterEngine(dockerApiVersion: String,
       }
     )
   }
+
+  override def log(containerId: String)(implicit system: ActorSystem): Future[Source[ByteString, NotUsed]] = {
+    val query = Query(("follow", "true"), ("stdout", "true"), ("timestamps", "true"))
+    http(Get(Uri(s"$baseUrl/containers/$containerId/logs").withQuery(query))).map(response => {
+      response.entity.dataBytes
+        .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 256))
+        .mapMaterializedValue(_ => NotUsed)
+    })
+  }
 }
 
 object DockerClusterEngine {
@@ -49,5 +63,6 @@ object DockerClusterEngine {
   }
 
   case class DockerContainer(id: String, names: Seq[String], image: String)
+
 }
 
